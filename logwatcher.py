@@ -11,17 +11,17 @@ import re
 #Constants
 #log_filename = 'testlog'
 log_filename = '/home/minecraft/server/server.log'
-html_filename = '/var/www/worldmap/online/index.html'
-#html_filename = '/var/www/worldmap/online/index2.html'
+#html_filename = '/var/www/worldmap/online/index.html'
+html_filename = '/var/www/worldmap/online/index2.html'
 server_lock_file = '/home/minecraft/server/server.log.lck'
 server_time_format = '%Y-%m-%d %H:%M:%S'
 date_format = '%b %d, %Y at %I:%M%p'
 data_file = 'logwatcher.dat'
-#data_file = 'logwatcher2.dat'
 in_label = 'in'
 out_label = 'out'
 in_order_label = 'in_order'
 out_order_label = 'out_order'
+log_pos_label = 'log_pos'
 
 pattern = re.compile(r'(?P<date>[0-9]{4}-[0-9]{2}-[0-9]{2})\s(?P<time>[0-9]{2}:[0-9]{2}:[0-9]{2})\s\[(?P<type>\w+)\]\s<?(?P<username>.+?)>?\s(\[/(?P<ip>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}):(?P<port>\d{1,5})\]\s)?(?P<message>.+)')
 
@@ -92,9 +92,9 @@ def daemonize_log_watcher():
     global Players
     Players[in_order_label] = []
     Players[out_order_label] = []
+    list_changed = True
     
     print 'Logwatcher is running...'
-    force_update = False #In case there is no saved session, force scan of entire log.
 
     #Open the log file 
     try:
@@ -103,35 +103,27 @@ def daemonize_log_watcher():
         print 'Could not open log file: {}'.format(log_filename)
         
     watcher = os.stat(log_filename)
-    last_modified = this_modified = watcher.st_mtime
-    list_changed = True
+    this_modified = watcher.st_mtime
+    last_modified = 0 #This will force the loop to run at least once.
      
     #If there's a saved data file, open it.
     if os.path.isfile(data_file):
         try:
             pickled_file = open(data_file, 'rb')
             Players = pickle.load(pickled_file)
-            logfile.seek(0, 2)
-            Players = get_player_list(logfile, Players)
-            write_html_file(Players)
-            this_modified = watcher.st_mtime
+            logfile.seek(Players[log_pos_label])
+            print('Pos: {}'.format(Players[log_pos_label]))
             
         except EOFError:
-            logfile.seek(0, 0)
-            force_update = True
+            pass
             
-    else:
-        logfile.seek(0, 0)
-        force_update = True
-
     try:
         while 1:
             if not server_online:
                 exit
 
-            if this_modified > last_modified or force_update:
+            if this_modified > last_modified:
                 last_modified = this_modified
-                force_update = False
 
                 while 1:
                     line = logfile.readline()
@@ -141,6 +133,9 @@ def daemonize_log_watcher():
                             list_changed = False
                             save_data_file(Players)
                             write_html_file(Players)
+
+                        #Save the log position.
+                        Players[log_pos_label] = logfile.tell()
                         break
 
                     match = pattern.search(line)
@@ -172,18 +167,12 @@ def daemonize_log_watcher():
     except KeyboardInterrupt:
         cleanup()
 
-def save_data_file(players, shutting_down = False):
+def save_data_file(players):
     try:
         pickle_file = open(data_file, 'w')
     except IOError:
         print 'Could not open data file.'
 
-    #If we're shutting down, mark everyone as disconnected.
-    if shutting_down:
-        for key, player in players.iteritems():
-            if player is Player and player.online:
-                player.add_disconnect_time(datetime.datetime.now())
-    
     pickle.dump(players, pickle_file)
 
 def remove_from_order_lists(name):
@@ -257,7 +246,7 @@ def write_html_file(players):
 def cleanup():
     global Players
     
-    save_data_file(Players, True)
+    save_data_file(Players)
     html_file = open(html_filename, 'w')
     html_file.write('Logwatcher is offline.')
     html_file.close()    
